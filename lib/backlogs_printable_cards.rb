@@ -7,7 +7,7 @@ require 'yaml'
 require 'uri/common'
 require 'open-uri/cached'
 require 'zlib'
-require 'nokogiri'
+require 'ox'
 
 unless defined?('ReliableTimout') || defined?(:ReliableTimout)
   if Backlogs.gems.include?('system_timer')
@@ -161,20 +161,20 @@ module BacklogsPrintableCards
           next
         end
 
-        doc = Nokogiri::XML(labels)
+        doc = Ox.parse(labels)
 
-        doc.xpath('Glabels-templates/Template').each { |specs|
+        doc.root.locate('Glabels-templates/Template').each { |specs|
           label = nil
 
           papersize = specs['size']
           papersize = 'Letter' if papersize == 'US-Letter'
 
-          specs.xpath('Label-rectangle').each { |geom|
+          specs.locate('Label-rectangle').each { |geom|
             margin = nil
-            geom.xpath('Markup-margin').each { |m| margin = m['size'] }
+            geom.locate('Markup-margin').each { |m| margin = m['size'] }
             margin = "1mm" if margin.blank?
 
-            geom.xpath('Layout').each { |layout|
+            geom.locate('Layout').each { |layout|
               label = {
                 'inner_margin' => margin,
                 'across' => Integer(layout['nx']),
@@ -203,7 +203,7 @@ module BacklogsPrintableCards
           else
             @@layouts[key] = stock if not @@layouts[key] or @@layouts[key].source == 'glabel'
 
-            specs.xpath('Alias').each { |also|
+            specs.locate('Alias').each { |also|
               aliaskey = "#{also['brand']} #{also['part']}"
               @@layouts[aliaskey] = stock if not @@layouts[aliaskey] or @@layouts[aliaskey].source == 'glabel'
             }
@@ -264,12 +264,12 @@ module BacklogsPrintableCards
         f = t if File.exists?(t)
       }
       raise "No template for #{template}" unless f
-      label = Nokogiri::XML(Zlib::GzipReader.open(f))
+      label = Ox.parse(Zlib::GzipReader.open(f).read)
 
-      bounds = label.xpath('//ns:Template/ns:Label-rectangle', 'ns' => 'http://snaught.com/glabels/2.2/')[0]
+      bounds = label.root.locate('Template/Label-rectangle')[0]
       @template = { :x => bounds['width'].units_to_points, :y => bounds['height'].units_to_points}
 
-      @card = label.xpath('//ns:Objects', 'ns' => 'http://snaught.com/glabels/2.2/')[0]
+      @card = label.locate('Objects')[0]
       @width = width
       @height = height
     end
@@ -284,7 +284,7 @@ module BacklogsPrintableCards
     end
 
     def style(b)
-      s = b.xpath('ns:Span', 'ns' => 'http://snaught.com/glabels/2.2/')[0]
+      s = b.locate('Span')[0]
       style = [s['font_weight'] == "Bold" ? 'bold' : nil, s['font_italic'] == "True" ? 'italic' : nil].compact.join('_')
       style = 'normal' if style == ''
       return {
@@ -318,10 +318,10 @@ module BacklogsPrintableCards
       default_fill_color = pdf.fill_color
 
       pdf.bounding_box [x, y], :width => @width, :height => @height do
-        @card.children.each {|obj|
+        @card.nodes.each {|obj|
           next if obj.text?
 
-          case obj.name
+          case obj.value
             when 'Object-box'
               dim = box(obj)
               pdf.fill_color = color(obj, 'fill_color') || default_fill_color
@@ -349,18 +349,18 @@ module BacklogsPrintableCards
             when 'Object-text'
               dim = box(obj)
 
-              pdf.fill_color = color(obj.xpath('ns:Span', 'ns' => 'http://snaught.com/glabels/2.2/')[0], 'color') || default_fill_color
+              pdf.fill_color = color(obj.locate('Span')[0], 'color') || default_fill_color
 
               content = ''
-              obj.xpath('ns:Span', 'ns' => 'http://snaught.com/glabels/2.2/')[0].children.each {|t|
+              obj.locate('Span')[0].nodes.each {|t|
                 if t.text?
                   content << t.text
-                elsif t.name == 'Field'
+                elsif t.value == 'Field'
                   f = data[t['name']]
                   raise "Unsupported card variable '#{t['name']}" unless f
                   content << f
                 else
-                  raise "Unsupported text object '#{t.name}'"
+                  raise "Unsupported text object '#{t.value}'"
                 end
               }
 
@@ -385,7 +385,7 @@ module BacklogsPrintableCards
               end
 
             else
-              raise "Unsupported object '#{obj.name}'"
+              raise "Unsupported object '#{obj.value}'"
           end
         }
       end
